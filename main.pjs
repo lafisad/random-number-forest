@@ -1,0 +1,27 @@
+// Random Number Forest — generator config.
+// Edit freely; the app re-reads these on load (window.config).
+
+$meta
+  title = Random Number Forest
+  description = A WASM module generates huge random numbers, samples 4-digit chunks, tests them for feasibility, and accepted chunks accumulate as abstract objects in an orbiting 3D scene (WebGPU with WebGL2 fallback).
+  tags = generative, wasm, webgpu, abstract, 3d
+  header
+    mode = minimal
+
+config
+  cycleMs = 1270            // ms between generation cycles
+  perCycle = 65             // huge random numbers generated per cycle (by WASM)
+  numDigits = 40            // digits per generated number
+  chunkLength = 4           // digits sampled per candidate chunk
+  candidatesPerCycle = 5    // chunks sampled from the batch per cycle
+  feasibilityDivisor = 3    // a+b+c+d must be divisible by this and a != 0
+
+  candidateTestDelayMs = 120   // delay before a yellow candidate is tested
+  renderGapMs = 160            // delay between accepted candidates being added to the scene
+
+  sceneSpan = 26           // world units of the x/z scatter
+  yMin = 2
+  yMax = 18
+  maxObjects = 600         // scene accumulation cap
+  cameraDistance = 34
+  autoOrbitSpeed = 0.06    // radians/sec

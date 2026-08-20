@@ -1,0 +1,534 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Random Number Forest</title>
+
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #0d0b12;
+  }
+  body {
+    color: #d6d0de;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    text-align: left;
+  }
+  #app {
+    display: flex;
+    height: 100vh;
+    width: 100%;
+  }
+  #panel {
+    width: 360px;
+    min-width: 280px;
+    max-width: 40vw;
+    background: #0f0d16;
+    border-right: 1px solid #231e30;
+    overflow-y: auto;
+    padding: 16px 14px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  h1 { font-size: 17px; margin: 0; color: #efe9ff; }
+  h2 {
+    font-size: 12px;
+    margin: 0 0 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #7d7494;
+  }
+  #stats {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: #b3aac8;
+  }
+  #batchList {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+    line-height: 1.6;
+    color: #77708c;
+    max-height: 28vh;
+    overflow-y: auto;
+    background: #0b0912;
+    border: 1px solid #1d1829;
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .num-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  mark.chunk {
+    background: #2b1247;
+    color: #e9c5ff;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  #candList {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 9px;
+    border-radius: 7px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    background: #16131f;
+    border-left: 3px solid #3a3350;
+  }
+  .row .stat { font-size: 11px; opacity: 0.8; }
+  .row.yellow { color: #facc15; border-left-color: #facc15; background: #241e08; }
+  .row.accepted { color: #4ade80; border-left-color: #4ade80; background: #0b2113; }
+  .row.rejected { color: #f87171; border-left-color: #f87171; background: #241011; }
+  .row.rendering {
+    outline: 2px solid #f0abfc;
+    outline-offset: -2px;
+    background: #33103f;
+    box-shadow: 0 0 14px rgba(240, 171, 252, 0.45);
+  }
+  #view {
+    flex: 1;
+    position: relative;
+    min-width: 0;
+  }
+  #scene {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #overlay {
+    position: absolute;
+    top: 10px;
+    left: 12px;
+    z-index: 5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    background: rgba(13, 11, 18, 0.75);
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid #2a2440;
+    color: #b3aac8;
+    pointer-events: none;
+  }
+  @media (max-width: 760px) {
+    #app { flex-direction: column; }
+    #panel {
+      width: 100%;
+      max-width: none;
+      max-height: 42vh;
+      border-right: 0;
+      border-bottom: 1px solid #231e30;
+    }
+    #batchList { max-height: 16vh; }
+  }
+</style>
+
+<div id="app">
+  <aside id="panel">
+    <header>
+      <h1>Random Number Forest</h1>
+      <p id="stats">booting…</p>
+    </header>
+    <section>
+      <h2>Generated numbers</h2>
+      <div id="batchList"></div>
+    </section>
+    <section>
+      <h2>Feasibility ledger</h2>
+      <div id="candList"></div>
+    </section>
+  </aside>
+  <main id="view">
+    <canvas id="scene"></canvas>
+    <div id="overlay">starting…</div>
+  </main>
+</div>
+
+<script src="src/scene.js"></script>
+<script src="src/renderer-webgl2.js"></script>
+<script src="src/renderer-webgpu.js"></script>
+<script>
+  /*
+    Random Number Forest — pipeline.
+
+    Every cycleMs the WASM module (src/rng.wasm, see src/rng.wat) generates
+    perCycle huge random numbers. candidatesPerCycle 4-digit chunks are
+    sampled from random positions inside them, shown in the ledger as
+    "will be tried" (yellow), tested (green = feasible / red = rejected),
+    and accepted chunks are added to the accumulating 3D scene, highlighted
+    while being rendered.
+
+    Feasibility: first digit != 0 and digit-sum divisible by feasibilityDivisor.
+
+    The script is written to survive the editor's in-place re-execution
+    (top-level vars only, idempotent boot, DOM re-bound each run).
+  */
+
+  var CFG = {
+    cycleMs: 1270,
+    perCycle: 65,
+    numDigits: 40,
+    chunkLength: 4,
+    candidatesPerCycle: 5,
+    feasibilityDivisor: 3,
+    candidateTestDelayMs: 120,
+    renderGapMs: 160,
+    sceneSpan: 26,
+    yMin: 2,
+    yMax: 18,
+    maxObjects: 600,
+    cameraDistance: 34,
+    autoOrbitSpeed: 0.06,
+  };
+  (function () {
+    var c = window.config || {};
+    for (var k in CFG) {
+      if (c[k] !== undefined && c[k] !== null && !isNaN(Number(c[k]))) {
+        CFG[k] = Number(c[k]);
+      }
+    }
+  })();
+  ArtScene.camera.target = [0, (CFG.yMin + CFG.yMax) / 2, 0];
+
+  var state = window.__artState || (window.__artState = {
+    cycleNum: 0,
+    generated: 0,
+    tried: 0,
+    accepted: 0,
+    rejected: 0,
+    nextId: 0,
+    pendingRender: [],
+    renderingCand: null,
+    booted: false,
+    bootFailed: false,
+    wasm: null,
+    renderer: null,
+    rendererKind: "",
+    lastT: performance.now(),
+  });
+
+  var batchEls = [];
+  var batchMarks = {};
+
+  var statsEl, batchListEl, candListEl, canvasEl, overlayEl;
+
+  function rebind() {
+    statsEl = document.getElementById("stats");
+    batchListEl = document.getElementById("batchList");
+    candListEl = document.getElementById("candList");
+    canvasEl = document.getElementById("scene");
+    overlayEl = document.getElementById("overlay");
+  }
+  rebind();
+
+  function delay(ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  }
+
+  function setOverlay(text) {
+    if (overlayEl) overlayEl.textContent = text;
+  }
+
+  function updateStats() {
+    if (statsEl) {
+      statsEl.textContent =
+        "cycle " + state.cycleNum +
+        " · generated " + state.generated +
+        " · tried " + state.tried +
+        " · feasible " + state.accepted +
+        " · rejected " + state.rejected +
+        " · in scene " + ArtScene.instances.length;
+    }
+  }
+
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360 / 360;
+    var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    var p = 2 * l - q;
+    function f(t) {
+      t = ((t % 1) + 1) % 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+    return [f(h + 1 / 3), f(h), f(h - 1 / 3)];
+  }
+
+  /* ---- WASM helpers ---- */
+
+  function genBatch() {
+    state.wasm.gen(CFG.perCycle, CFG.numDigits);
+    var mem = new Uint8Array(state.wasm.memory.buffer);
+    var stride = CFG.numDigits + 1;
+    var base = state.wasm.buffer();
+    var out = [];
+    for (var i = 0; i < CFG.perCycle; i++) {
+      var off = base + i * stride;
+      var s = "";
+      for (var j = 0; j < CFG.numDigits; j++) s += String.fromCharCode(mem[off + j]);
+      out.push(s);
+    }
+    return out;
+  }
+
+  function sampleChunk(batch) {
+    var i = (state.wasm.next32() >>> 0) % batch.length;
+    var maxPos = batch[i].length - CFG.chunkLength;
+    var pos = (state.wasm.next32() >>> 0) % (maxPos + 1);
+    return { bigIndex: i, pos: pos, chunk: batch[i].slice(pos, pos + CFG.chunkLength) };
+  }
+
+  function feasible(chunk) {
+    var sum = 0;
+    for (var i = 0; i < chunk.length; i++) sum += chunk.charCodeAt(i) - 48;
+    return chunk[0] !== "0" && sum % CFG.feasibilityDivisor === 0;
+  }
+
+  /* ---- ledger DOM ---- */
+
+  function renderBatch(batch) {
+    batchListEl.textContent = "";
+    batchEls = [];
+    batchMarks = {};
+    for (var i = 0; i < batch.length; i++) {
+      var line = document.createElement("div");
+      line.className = "num-line";
+      line.dataset.full = batch[i];
+      line.textContent = batch[i];
+      batchListEl.appendChild(line);
+      batchEls.push(line);
+    }
+  }
+
+  function markChunk(idx, pos, len) {
+    (batchMarks[idx] = batchMarks[idx] || []).push({ pos: pos, len: len });
+    var line = batchEls[idx];
+    if (!line) return;
+    var text = line.dataset.full;
+    var marks = batchMarks[idx].slice().sort(function (a, b) { return a.pos - b.pos; });
+    var html = "";
+    var cursor = 0;
+    for (var i = 0; i < marks.length; i++) {
+      var m = marks[i];
+      html += text.slice(cursor, m.pos);
+      html += "<mark class=\"chunk\">" + text.slice(m.pos, m.pos + m.len) + "</mark>";
+      cursor = m.pos + m.len;
+    }
+    html += text.slice(cursor);
+    line.innerHTML = html;
+  }
+
+  function addCandRow(c) {
+    var row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = "<span class=\"num\"></span><span class=\"stat\"></span>";
+    candListEl.prepend(row);
+    if (candListEl.children.length > 160) candListEl.lastChild.remove();
+    c.row = row;
+    setRowStatus(c);
+    return row;
+  }
+
+  function setRowStatus(c) {
+    if (!c.row) return;
+    var rendering = state.renderingCand === c;
+    var cls = { trying: "yellow", accepted: "accepted", rejected: "rejected" }[c.status] || c.status;
+    c.row.className = "row " + cls + (rendering ? " rendering" : "");
+    var label = c.row.querySelector(".stat");
+    var texts = { trying: "will be tried", accepted: "feasible", rejected: "won't work" };
+    label.textContent = rendering ? "rendering…" : texts[c.status];
+    c.row.querySelector(".num").textContent = c.chunk;
+  }
+
+  /* ---- scene mapping ---- */
+
+  function addToScene(c) {
+    var d = c.chunk.split("").map(Number);
+    var a = d[0], b = d[1], cc = d[2], dd = d[3];
+    var span = CFG.sceneSpan;
+    var x = ((a * 10 + b) / 100 - 0.5) * span;
+    var z = ((cc * 10 + dd) / 100 - 0.5) * span;
+    var n = Number(c.chunk);
+    var y = CFG.yMin + (n % (CFG.yMax - CFG.yMin));
+    var hue = ((a * 10 + b) / 100) * 360;
+    var sat = 0.65 + 0.33 * (cc / 9);
+    var light = 0.48 + 0.27 * (dd / 9);
+    var rgb = hslToRgb(hue, sat, light);
+    var sx = 0.5 + 0.6 * ((a + b) / 18);
+    var sy = 0.5 + 0.6 * ((cc + dd) / 18);
+    var sz = 0.5 + 0.6 * ((b + dd) / 18);
+    var rotY = ((b * 10 + dd) / 99) * Math.PI * 2;
+    var shape = (a + b + cc + dd) % 2;
+    ArtScene.addInstance({
+      x: x, y: y, z: z,
+      sx: sx, sy: sy, sz: sz,
+      rotY: rotY,
+      r: rgb[0], g: rgb[1], b: rgb[2],
+      shape: shape,
+    });
+    ArtScene.cull(CFG.maxObjects);
+  }
+
+  /* ---- pipeline ---- */
+
+  function scheduleTest(c) {
+    setTimeout(function () {
+      if (c.status !== "trying") return;
+      c.status = feasible(c.chunk) ? "accepted" : "rejected";
+      if (c.status === "accepted") {
+        state.accepted++;
+        state.pendingRender.push(c);
+      } else {
+        state.rejected++;
+      }
+      setRowStatus(c);
+      updateStats();
+    }, CFG.candidateTestDelayMs);
+  }
+
+  function genTick() {
+    try {
+      var batch = genBatch();
+      state.cycleNum++;
+      state.generated += batch.length;
+      renderBatch(batch);
+      for (var k = 0; k < CFG.candidatesPerCycle; k++) {
+        var s = sampleChunk(batch);
+        markChunk(s.bigIndex, s.pos, s.chunk.length);
+        var c = { id: state.nextId++, chunk: s.chunk, status: "trying" };
+        addCandRow(c);
+        state.tried++;
+        updateStats();
+        scheduleTest(c);
+      }
+      updateStats();
+    } catch (err) {
+      console.error("genTick failed:", err);
+    }
+  }
+
+  async function renderWorker() {
+    while (true) {
+      if (state.pendingRender.length) {
+        var c = state.pendingRender.shift();
+        state.renderingCand = c;
+        setRowStatus(c);
+        try {
+          addToScene(c);
+        } catch (err) {
+          console.error(err);
+        }
+        updateStats();
+        await delay(CFG.renderGapMs);
+        state.renderingCand = null;
+        setRowStatus(c);
+        updateStats();
+      } else {
+        await delay(80);
+      }
+    }
+  }
+
+  /* ---- rendering loop ---- */
+
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = src;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error("failed to load " + src)); };
+      document.body.appendChild(s);
+    });
+  }
+
+  async function ensureWGLoaded() {
+    if (typeof window.ArtRendererWG === "function") return;
+    // the perchance editor can drop external script tags while re-executing
+    // the body (PERCH.executeScriptTag insertBefore race) — re-inject it
+    for (var i = 0; i < 3 && typeof window.ArtRendererWG !== "function"; i++) {
+      await loadScript("src/renderer-webgpu.js");
+    }
+  }
+
+  async function initRenderer() {
+    var params = new URLSearchParams(location.search);
+    if (navigator.gpu && params.get("backend") !== "gl2") {
+      try {
+        await ensureWGLoaded();
+        var r = new ArtRendererWG(canvasEl);
+        await r.init();
+        state.rendererKind = "WebGPU";
+        return r;
+      } catch (e) {
+        console.warn("WebGPU init failed, falling back to WebGL2:", e);
+      }
+    }
+    var r2 = new ArtRendererGL2(canvasEl);
+    r2.init();
+    state.rendererKind = "WebGL2";
+    return r2;
+  }
+
+  async function loop() {
+    var now = performance.now();
+    var dt = Math.min((now - state.lastT) / 1000, 0.1);
+    state.lastT = now;
+    if (state.renderer) {
+      if (state.renderer.canvas !== canvasEl) {
+        state.renderer = await initRenderer();
+      }
+      var aspect = (canvasEl.clientWidth || 1) / (canvasEl.clientHeight || 1);
+      ArtScene.camera.yaw += dt * CFG.autoOrbitSpeed;
+      state.renderer.frame(ArtScene, aspect);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  async function boot() {
+    rebind();
+    if (state.booted) {
+      // Re-bind the renderer to a freshly re-rendered canvas if needed.
+      if (state.renderer && state.renderer.canvas !== canvasEl) {
+        state.renderer = await initRenderer();
+        setOverlay("backend: " + state.rendererKind + " · running");
+      }
+      return;
+    }
+    state.booted = true;
+    try {
+      var res = await fetch("src/rng.wasm");
+      var buf = await res.arrayBuffer();
+      var mod = await WebAssembly.instantiate(buf, {});
+      state.wasm = mod.instance.exports;
+      state.wasm.seed((Math.random() * 0xffffffff) >>> 0, (Math.random() * 0xffffffff) >>> 0);
+
+      state.renderer = await initRenderer();
+      ArtScene.camera.dist = CFG.cameraDistance;
+      ArtScene.camera.target = [0, (CFG.yMin + CFG.yMax) / 2, 0];
+      setOverlay("backend: " + state.rendererKind + " · running");
+      updateStats();
+      requestAnimationFrame(loop);
+      genTick();
+      renderWorker();
+      setInterval(genTick, CFG.cycleMs);
+    } catch (err) {
+      state.booted = false;
+      state.bootFailed = true;
+      setOverlay("failed to start: " + (err && err.message));
+      console.error(err);
+    }
+  }
+
+  boot();
+</script>
