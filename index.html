@@ -196,6 +196,7 @@
   </main>
 </div>
 
+<script src="src/logo.js"></script>
 <script src="src/scene.js"></script>
 <script src="src/renderer-webgl2.js"></script>
 <script src="src/renderer-webgpu.js"></script>
@@ -215,7 +216,6 @@
     The script is written to survive the editor's in-place re-execution
     (top-level vars only, idempotent boot, DOM re-bound each run).
   */
-
   var CFG = {
     cycleMs: 1270,
     perCycle: 65,
@@ -599,13 +599,19 @@
     var params = new URLSearchParams(location.search);
     if (navigator.gpu && params.get("backend") !== "gl2") {
       try {
+        console.log("attempting WebGPU init…");
         await ensureWGLoaded();
+        console.log("WebGPU script loaded, initializing renderer…");
         var r = new ArtRendererWG(canvasEl);
+        console.log("WebGPU renderer created, calling init()…");
         await r.init();
+        console.log("WebGPU renderer init() completed successfully.");
         state.rendererKind = "WebGPU";
+        console.log("WebGPU init successful, using WebGPU renderer.");
         return r;
       } catch (e) {
         console.warn("WebGPU init failed, falling back to WebGL2:", e);
+        console.error(e);
       }
     }
     var r2 = new ArtRendererGL2(canvasEl);
@@ -633,6 +639,7 @@
     rebind();
     if (state.booted) {
       // Re-bind the renderer to a freshly re-rendered canvas if needed.
+      console.log("boot() called again, re-binding renderer if needed.");
       if (state.renderer && state.renderer.canvas !== canvasEl) {
         state.renderer = await initRenderer();
         setOverlay("backend: " + state.rendererKind + " · running");
@@ -665,4 +672,5 @@
   }
 
   boot();
+  console.log("Random Number Forest booted, cycleMs=" + CFG.cycleMs + ", perCycle=" + CFG.perCycle + ", candidatesPerCycle=" + CFG.candidatesPerCycle);
 </script>
