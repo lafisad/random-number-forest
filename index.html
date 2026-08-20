@@ -120,6 +120,47 @@
     color: #b3aac8;
     pointer-events: none;
   }
+  #renderInfo {
+    position: absolute;
+    top: 48px;
+    left: 12px;
+    z-index: 5;
+    width: min(330px, calc(100% - 24px));
+    box-sizing: border-box;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    background: rgba(13, 11, 18, 0.82);
+    padding: 9px 10px;
+    border-radius: 7px;
+    border: 1px solid #2a2440;
+    color: #b3aac8;
+    pointer-events: none;
+  }
+  #renderInfo .info-title,
+  #renderInfo .info-label {
+    color: #7d7494;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  #renderInfo .info-title { color: #e9c5ff; }
+  #renderInfo .info-value {
+    color: #f2eaff;
+    font-size: 18px;
+    line-height: 1.2;
+    margin: 2px 0 8px;
+  }
+  #renderInfo .info-section { margin-top: 7px; }
+  #renderInfo .info-source { white-space: nowrap; overflow: hidden; }
+  #renderInfo mark.chunk { background: #5a2b78; color: #fff0ff; }
+  #renderInfo .info-feasibility { color: #d6d0de; }
+  #renderInfo .info-result { color: #4ade80; margin-top: 2px; }
+  #renderInfo .info-result.pending { color: #facc15; }
+  #renderInfo .cycle-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #renderInfo .cycle-line.accepted { color: #4ade80; }
+  #renderInfo .cycle-line.rejected { color: #f87171; }
+  #renderInfo .cycle-line.trying { color: #facc15; }
   @media (max-width: 760px) {
     #app { flex-direction: column; }
     #panel {
@@ -151,6 +192,7 @@
   <main id="view">
     <canvas id="scene"></canvas>
     <div id="overlay">starting…</div>
+    <div id="renderInfo"></div>
   </main>
 </div>
 
@@ -209,6 +251,7 @@
     nextId: 0,
     pendingRender: [],
     renderingCand: null,
+    cycleCandidates: [],
     booted: false,
     bootFailed: false,
     wasm: null,
@@ -220,7 +263,7 @@
   var batchEls = [];
   var batchMarks = {};
 
-  var statsEl, batchListEl, candListEl, canvasEl, overlayEl;
+  var statsEl, batchListEl, candListEl, canvasEl, overlayEl, renderInfoEl;
 
   function rebind() {
     statsEl = document.getElementById("stats");
@@ -228,8 +271,11 @@
     candListEl = document.getElementById("candList");
     canvasEl = document.getElementById("scene");
     overlayEl = document.getElementById("overlay");
+    renderInfoEl = document.getElementById("renderInfo");
   }
   rebind();
+
+  if (!state.cycleCandidates) state.cycleCandidates = [];
 
   function delay(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
@@ -237,6 +283,88 @@
 
   function setOverlay(text) {
     if (overlayEl) overlayEl.textContent = text;
+  }
+
+  function updateRenderInfo() {
+    if (!renderInfoEl) return;
+    renderInfoEl.textContent = "";
+    var current = state.renderingCand;
+    var title = document.createElement("div");
+    title.className = "info-title";
+    title.textContent = "Now rendering";
+    renderInfoEl.appendChild(title);
+    var value = document.createElement("div");
+    value.className = "info-value";
+    value.textContent = current ? current.chunk : "—";
+    renderInfoEl.appendChild(value);
+
+    var sourceLabel = document.createElement("div");
+    sourceLabel.className = "info-label";
+    sourceLabel.textContent = "Source number";
+    renderInfoEl.appendChild(sourceLabel);
+    var source = document.createElement("div");
+    source.className = "info-source";
+    if (current) {
+      source.appendChild(document.createTextNode(current.source.slice(0, current.pos)));
+      var selected = document.createElement("mark");
+      selected.className = "chunk";
+      selected.textContent = current.source.slice(current.pos, current.pos + current.chunk.length);
+      source.appendChild(selected);
+      source.appendChild(document.createTextNode(current.source.slice(current.pos + current.chunk.length)));
+    } else {
+      source.textContent = "—";
+    }
+    renderInfoEl.appendChild(source);
+
+    var feasibility = document.createElement("div");
+    feasibility.className = "info-section";
+    var feasibilityLabel = document.createElement("div");
+    feasibilityLabel.className = "info-label";
+    feasibilityLabel.textContent = "Feasibility";
+    feasibility.appendChild(feasibilityLabel);
+    if (current) {
+      var sum = 0;
+      for (var i = 0; i < current.chunk.length; i++) sum += current.chunk.charCodeAt(i) - 48;
+      var first = document.createElement("div");
+      first.className = "info-feasibility";
+      first.textContent = (current.chunk[0] !== "0" ? "✓" : "✗") + " first digit ≠ 0";
+      feasibility.appendChild(first);
+      var sumLine = document.createElement("div");
+      sumLine.className = "info-feasibility";
+      sumLine.textContent = "✓ " + current.chunk.split("").join(" + ") + " = " + sum;
+      feasibility.appendChild(sumLine);
+      var remainder = sum % CFG.feasibilityDivisor;
+      var modLine = document.createElement("div");
+      modLine.className = "info-feasibility";
+      modLine.textContent = "✓ " + sum + " mod " + CFG.feasibilityDivisor + " = " + remainder;
+      feasibility.appendChild(modLine);
+      var result = document.createElement("div");
+      result.className = "info-result" + (current.status === "trying" ? " pending" : "");
+      result.textContent = "→ " + (current.status === "trying" ? "PENDING" : (feasible(current.chunk) ? "FEASIBLE" : "WON'T WORK"));
+      feasibility.appendChild(result);
+    } else {
+      var waiting = document.createElement("div");
+      waiting.className = "info-feasibility";
+      waiting.textContent = "waiting…";
+      feasibility.appendChild(waiting);
+    }
+    renderInfoEl.appendChild(feasibility);
+
+    var cycle = document.createElement("div");
+    cycle.className = "info-section";
+    var cycleLabel = document.createElement("div");
+    cycleLabel.className = "info-label";
+    cycleLabel.textContent = "This cycle";
+    cycle.appendChild(cycleLabel);
+    state.cycleCandidates.forEach(function (candidate) {
+      var line = document.createElement("div");
+      line.className = "cycle-line " + candidate.status;
+      var icon = candidate.status === "accepted" ? "🟢" : candidate.status === "rejected" ? "🔴" : "🟡";
+      var label = candidate.status === "accepted" ? "feasible" : candidate.status === "rejected" ? "won't work" : "will be tried";
+      line.textContent = icon + " " + candidate.chunk + " " + label;
+      cycle.appendChild(line);
+    });
+    renderInfoEl.appendChild(cycle);
   }
 
   function updateStats() {
@@ -286,7 +414,7 @@
     var i = (state.wasm.next32() >>> 0) % batch.length;
     var maxPos = batch[i].length - CFG.chunkLength;
     var pos = (state.wasm.next32() >>> 0) % (maxPos + 1);
-    return { bigIndex: i, pos: pos, chunk: batch[i].slice(pos, pos + CFG.chunkLength) };
+    return { bigIndex: i, pos: pos, source: batch[i], chunk: batch[i].slice(pos, pos + CFG.chunkLength) };
   }
 
   function feasible(chunk) {
@@ -393,6 +521,7 @@
         state.rejected++;
       }
       setRowStatus(c);
+      updateRenderInfo();
       updateStats();
     }, CFG.candidateTestDelayMs);
   }
@@ -402,16 +531,19 @@
       var batch = genBatch();
       state.cycleNum++;
       state.generated += batch.length;
+      state.cycleCandidates = [];
       renderBatch(batch);
       for (var k = 0; k < CFG.candidatesPerCycle; k++) {
         var s = sampleChunk(batch);
         markChunk(s.bigIndex, s.pos, s.chunk.length);
-        var c = { id: state.nextId++, chunk: s.chunk, status: "trying" };
+        var c = { id: state.nextId++, chunk: s.chunk, source: s.source, bigIndex: s.bigIndex, pos: s.pos, status: "trying" };
+        state.cycleCandidates.push(c);
         addCandRow(c);
         state.tried++;
         updateStats();
         scheduleTest(c);
       }
+      updateRenderInfo();
       updateStats();
     } catch (err) {
       console.error("genTick failed:", err);
@@ -424,6 +556,7 @@
         var c = state.pendingRender.shift();
         state.renderingCand = c;
         setRowStatus(c);
+        updateRenderInfo();
         try {
           addToScene(c);
         } catch (err) {
@@ -433,6 +566,7 @@
         await delay(CFG.renderGapMs);
         state.renderingCand = null;
         setRowStatus(c);
+        updateRenderInfo();
         updateStats();
       } else {
         await delay(80);
