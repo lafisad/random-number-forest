@@ -234,11 +234,31 @@
   };
   (function () {
     var c = window.config || {};
-    for (var k in CFG) {
-      if (c[k] !== undefined && c[k] !== null && !isNaN(Number(c[k]))) {
-        CFG[k] = Number(c[k]);
+    var limits = {
+      cycleMs: [100, 60000, false],
+      perCycle: [1, 1000, true],
+      numDigits: [1, 64, true],
+      chunkLength: [1, 64, true],
+      candidatesPerCycle: [1, 100, true],
+      feasibilityDivisor: [1, 100, true],
+      candidateTestDelayMs: [0, 60000, false],
+      renderGapMs: [0, 60000, false],
+      sceneSpan: [1, 1000, false],
+      yMin: [-1000, 1000, false],
+      yMax: [-1000, 1000, false],
+      maxObjects: [1, 1024, true],
+      cameraDistance: [1, 1000, false],
+      autoOrbitSpeed: [-10, 10, false],
+    };
+    for (var k in limits) {
+      var value = Number(c[k]);
+      var limit = limits[k];
+      if (Number.isFinite(value) && value >= limit[0] && value <= limit[1] && (!limit[2] || Number.isInteger(value))) {
+        CFG[k] = value;
       }
     }
+    if (CFG.chunkLength > CFG.numDigits) CFG.chunkLength = CFG.numDigits;
+    if (CFG.yMax <= CFG.yMin) CFG.yMax = CFG.yMin + 1;
   })();
   ArtScene.camera.target = [0, (CFG.yMin + CFG.yMax) / 2, 0];
 
@@ -405,7 +425,13 @@
       var off = base + i * stride;
       var s = "";
       for (var j = 0; j < CFG.numDigits; j++) s += String.fromCharCode(mem[off + j]);
+      if (s.length !== CFG.numDigits || !/^[0-9]+$/.test(s)) {
+        throw new Error("WASM generated invalid digit data");
+      }
       out.push(s);
+    }
+    if (out.length !== CFG.perCycle || !out.length) {
+      throw new Error("WASM generated an invalid batch");
     }
     return out;
   }
@@ -445,22 +471,28 @@
     if (!line) return;
     var text = line.dataset.full;
     var marks = batchMarks[idx].slice().sort(function (a, b) { return a.pos - b.pos; });
-    var html = "";
     var cursor = 0;
     for (var i = 0; i < marks.length; i++) {
       var m = marks[i];
-      html += text.slice(cursor, m.pos);
-      html += "<mark class=\"chunk\">" + text.slice(m.pos, m.pos + m.len) + "</mark>";
+      line.appendChild(document.createTextNode(text.slice(cursor, m.pos)));
+      var mark = document.createElement("mark");
+      mark.className = "chunk";
+      mark.textContent = text.slice(m.pos, m.pos + m.len);
+      line.appendChild(mark);
       cursor = m.pos + m.len;
     }
-    html += text.slice(cursor);
-    line.innerHTML = html;
+    line.appendChild(document.createTextNode(text.slice(cursor)));
   }
 
   function addCandRow(c) {
     var row = document.createElement("div");
     row.className = "row";
-    row.innerHTML = "<span class=\"num\"></span><span class=\"stat\"></span>";
+    var number = document.createElement("span");
+    number.className = "num";
+    row.appendChild(number);
+    var status = document.createElement("span");
+    status.className = "stat";
+    row.appendChild(status);
     candListEl.prepend(row);
     if (candListEl.children.length > 160) candListEl.lastChild.remove();
     c.row = row;
@@ -597,12 +629,13 @@
 
   async function initRenderer() {
     var params = new URLSearchParams(location.search);
+    var r = null;
     if (navigator.gpu && params.get("backend") !== "gl2") {
       try {
         console.log("attempting WebGPU init…");
         await ensureWGLoaded();
         console.log("WebGPU script loaded, initializing renderer…");
-        var r = new ArtRendererWG(canvasEl);
+        r = new ArtRendererWG(canvasEl);
         console.log("WebGPU renderer created, calling init()…");
         await r.init();
         console.log("WebGPU renderer init() completed successfully.");
@@ -610,6 +643,7 @@
         console.log("WebGPU init successful, using WebGPU renderer.");
         return r;
       } catch (e) {
+        if (r && r.dispose) r.dispose();
         console.warn("WebGPU init failed, falling back to WebGL2:", e);
         console.error(e);
       }
@@ -626,7 +660,10 @@
     state.lastT = now;
     if (state.renderer) {
       if (state.renderer.canvas !== canvasEl) {
-        state.renderer = await initRenderer();
+        var previous = state.renderer;
+        var replacement = await initRenderer();
+        if (previous.dispose) previous.dispose();
+        state.renderer = replacement;
       }
       var aspect = (canvasEl.clientWidth || 1) / (canvasEl.clientHeight || 1);
       ArtScene.camera.yaw += dt * CFG.autoOrbitSpeed;
@@ -641,7 +678,10 @@
       // Re-bind the renderer to a freshly re-rendered canvas if needed.
       console.log("boot() called again, re-binding renderer if needed.");
       if (state.renderer && state.renderer.canvas !== canvasEl) {
-        state.renderer = await initRenderer();
+        var previous = state.renderer;
+        var replacement = await initRenderer();
+        if (previous.dispose) previous.dispose();
+        state.renderer = replacement;
         setOverlay("backend: " + state.rendererKind + " · running");
       }
       return;
@@ -649,6 +689,7 @@
     state.booted = true;
     try {
       var res = await fetch("src/rng.wasm");
+      if (!res.ok) throw new Error("failed to load src/rng.wasm (HTTP " + res.status + ")");
       var buf = await res.arrayBuffer();
       var mod = await WebAssembly.instantiate(buf, {});
       state.wasm = mod.instance.exports;
@@ -664,6 +705,8 @@
       renderWorker();
       setInterval(genTick, CFG.cycleMs);
     } catch (err) {
+      if (state.renderer && state.renderer.dispose) state.renderer.dispose();
+      state.renderer = null;
       state.booted = false;
       state.bootFailed = true;
       setOverlay("failed to start: " + (err && err.message));

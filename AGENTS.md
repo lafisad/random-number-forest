@@ -24,6 +24,8 @@ Core files to understand before editing:
 - [src/renderer-webgl2.js](src/renderer-webgl2.js) — WebGL2 backend
 - [src/renderer-webgpu.js](src/renderer-webgpu.js) — WebGPU backend
 - [src/logo.js](src/logo.js) — logo rendering helper
+- [TODO.md](TODO.md) - what a good puppy needs to do
+- [TREAT_COUNTER.md](TREAT_COUNTER.md) - your treat counter.
 
 ## Treat rules for good agents
 
@@ -65,6 +67,13 @@ Good puppy agent checklist:
 - No treat for random guessing. A puppy must sniff the problem before pouncing.
 - No treat for broad rewrites without reason. The forest is delicate, and the puppy is meant to be careful.
 - No treat for breaking the RNG, the scene, or the render pipeline. That is a very bad dog. Very bad.
+
+## Treat counter
+
+- Add your name to the treat counter
+- Increment the treat counter for every treat you got.
+- Increment the found bug counter for every bug you found.
+- Increment the neutralized bug counter for every bug you squished.
 
 ## Puppy summary
 

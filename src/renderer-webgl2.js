@@ -103,7 +103,7 @@ window.ArtRendererGL2 = class ArtRendererGL2 {
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
     gl.bindVertexArray(null);
-    return { vao, count: data.length / 6 };
+    return { vao, vbo, count: data.length / 6 };
   }
 
   resize() {
@@ -120,6 +120,7 @@ window.ArtRendererGL2 = class ArtRendererGL2 {
 
   frame(scene, aspect) {
     const gl = this.gl;
+    this.resize();
     const { viewProj, cam, time } = scene.getViewProj(aspect, false);
     const cubeRows = [];
     const octaRows = [];
@@ -187,5 +188,18 @@ window.ArtRendererGL2 = class ArtRendererGL2 {
     }
     ctx.putImageData(img, 0, 0);
     return c.toDataURL("image/png");
+  }
+
+  dispose() {
+    const gl = this.gl;
+    if (!gl) return;
+    if (this.prog) gl.deleteProgram(this.prog);
+    if (this.instanceBuf) gl.deleteBuffer(this.instanceBuf);
+    Object.keys(this.meshes).forEach((key) => {
+      gl.deleteBuffer(this.meshes[key].vbo);
+      gl.deleteVertexArray(this.meshes[key].vao);
+    });
+    this.meshes = {};
+    this.gl = null;
   }
 };

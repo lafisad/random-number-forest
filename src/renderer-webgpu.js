@@ -243,6 +243,7 @@ fn fs(in : VSOut, @builtin(front_facing) ff : bool) -> @location(0) vec4f {
   }
 
   frame(scene, aspect) {
+    this.resize();
     var counts = this._writeInstanceData(scene);
     var enc = this.device.createCommandEncoder();
     this._draw(enc, this.context.getCurrentTexture().createView(), counts, aspect);
@@ -307,5 +308,21 @@ fn fs(in : VSOut, @builtin(front_facing) ff : bool) -> @location(0) vec4f {
     buf.unmap();
     buf.destroy();
     return c.toDataURL("image/png");
+  }
+
+  dispose() {
+    if (this.depth) this.depth.destroy();
+    if (this.shotTex) this.shotTex.destroy();
+    if (this.geoBuf) this.geoBuf.destroy();
+    if (this.uniformBufs) {
+      for (var i = 0; i < this.uniformBufs.length; i++) this.uniformBufs[i].destroy();
+    }
+    if (this.device) this.device.destroy();
+    this.depth = null;
+    this.shotTex = null;
+    this.geoBuf = null;
+    this.uniformBufs = null;
+    this.device = null;
+    this.context = null;
   }
 };

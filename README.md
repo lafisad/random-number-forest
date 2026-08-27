@@ -110,6 +110,24 @@ WebGPU is used when available, otherwise WebGL2 (force with `?backend=gl2`). Bot
 share the same scene model and per-vertex lighting (directional key light, fill light,
 rim light, plus a short birth-flash on newly added objects). The scene accumulates up to
 `maxObjects` instances, then the oldest are culled.
+The runtime caps `maxObjects` at 1024 because both backends use storage or instance
+buffers sized for that maximum.
+
+## Deployment and runtime safety
+
+This is a static, client-side application. A web server only needs to serve `index.html`,
+`main.pjs`, the JavaScript files, and `src/rng.wasm`; generation, sampling, feasibility
+checks, and rendering all run in the visitor's browser. No server-side runtime or API is
+required. Serve the directory over HTTP(S) rather than opening `index.html` directly,
+because browsers restrict the WASM `fetch()` used by the page on `file://` URLs. WebGPU
+requires a secure context; WebGL2 remains the fallback when WebGPU is unavailable.
+The WASM response is checked for a successful HTTP status before instantiation, and
+renderer initialization failures release any resources created before fallback or retry.
+
+Values supplied through `window.config` are accepted only when finite and within the
+runtime's safe bounds. Integer counts are normalized to integers, the chunk length is
+limited to the generated number length, and the scene height is kept nonzero. Ledger
+content is inserted as text nodes, so generated data is never interpreted as HTML.
 
 ## The RNG
 
