@@ -12,8 +12,11 @@ Each generation cycle the WASM RNG emits a batch of 65 random 40-digit decimal s
 From that batch, 5 chunks of 4 consecutive digits are sampled — each from a *random*
 position within its parent string. Every chunk is tested against a feasibility rule; the
 chunks that pass are rendered into the scene, one object per accepted chunk, and stay
-there. A side ledger shows the raw numbers, marks the sampled chunks, and tracks each
-candidate through `will be tried → feasible / won't work → rendering`.
+there until the scene reaches its object cap, at which point the oldest objects are
+culled. The side ledger shows the current batch of raw numbers, marks sampled chunks,
+and keeps a rolling list of recent candidates. Each candidate moves through
+`will be tried → feasible / won't work`; the currently queued candidate is temporarily
+shown as `rendering` while it is added to the scene.
 
 ## How it works
 
@@ -26,8 +29,9 @@ candidate through `will be tried → feasible / won't work → rendering`.
 4. **Render** — accepted chunks are added to the scene after a short stagger
    (`renderGapMs`), each becoming one instanced cube or octahedron with position, size,
    color and spin derived from its digits. The camera slowly orbits the whole forest.
-5. **Ledger** — every generated number, every sampled chunk and every candidate's fate is
-   listed live; the chunk currently being rendered is highlighted.
+5. **Ledger** — the current batch of generated numbers and its sampled chunks are shown
+   live, while recent candidates and their fates are retained in a rolling list; the
+   chunk currently being rendered is highlighted.
 
 ## The mathematics
 
@@ -86,7 +90,7 @@ $$\theta_y = \frac{10 d_2 + d_4}{99} \cdot 2\pi$$
 | File | Role |
 | --- | --- |
 | `src/rng.wat` | Hand-written WAT source of the RNG module (mulberry32, see below). Rebuild with `wabt` → `src/rng.wasm`. |
-| `src/rng.wasm` | Compiled 346-byte WASM RNG: `seed()`, `gen(count, digits)` emits digit strings into memory. |
+| `src/rng.wasm` | Compiled 346-byte WASM RNG: `seed()`, `gen(count, digits)` emits digit strings into memory, plus `buffer()` and `next32()` exports used by the page. |
 | `src/scene.js` | Shared scene model & camera: cube/octahedron geometry, model matrices, orbiting camera with view-projection. |
 | `src/renderer-webgpu.js` | WebGPU backend (storage-buffer instancing; no vertex buffers — some drivers render black otherwise). |
 | `src/renderer-webgl2.js` | WebGL2 fallback backend, same lighting model. |
